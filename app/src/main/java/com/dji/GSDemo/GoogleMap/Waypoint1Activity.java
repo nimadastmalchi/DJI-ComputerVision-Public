@@ -348,30 +348,30 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
                     }
 
                     markerOptions.rotation((float) rotationAngle);
+                    markerOptions.icon(BitmapDescriptorFactory.fromResource(R.drawable.aircraft));
+                    markerOptions.anchor(0.5f, 0.5f); // center the icon
+
+                    // print status:
+                    // output altitude and speed:
+                    TextView altitudeView = (TextView) (findViewById(R.id.altitudeTextView));
+                    String temp = "Altitude: " + mFlightController.getState().getAircraftLocation().getAltitude() + "\n";
+                    float vx = mFlightController.getState().getVelocityX();
+                    float vy = mFlightController.getState().getVelocityY();
+                    float vz = mFlightController.getState().getVelocityZ();
+                    double v = Math.sqrt(vx*vx + vy*vy + vz*vz);
+                    temp += String.format("Speed: %.2f m/s", v);
+                    altitudeView.setText(temp);
+
+                    // output flight time:
+                    TextView timerTextView = (TextView) (findViewById(R.id.timerTextView));
+                    double elapsedTime = startTime == -1 ? 0 : (System.currentTimeMillis() - startTime) / 1000.0;
+                    int minutes = ((int) elapsedTime % 3600) / 60;
+                    int seconds = (int) elapsedTime % 60;
+                    temp = String.format("Flight Time is %02d:%02d", minutes, seconds);
+                    timerTextView.setText(temp);
                 }
             });
         }
-        markerOptions.icon(BitmapDescriptorFactory.fromResource(R.drawable.aircraft));
-        markerOptions.anchor(0.5f, 0.5f); // center the icon
-
-        // print status:
-        // output altitude and speed:
-        TextView altitudeView = (TextView) (findViewById(R.id.altitudeTextView));
-        String temp = "Altitude: " + mFlightController.getState().getAircraftLocation().getAltitude() + "\n";
-        float vx = mFlightController.getState().getVelocityX();
-        float vy = mFlightController.getState().getVelocityY();
-        float vz = mFlightController.getState().getVelocityZ();
-        double v = Math.sqrt(vx*vx + vy*vy + vz*vz);
-        temp += String.format("Speed: %.2f m/s", v);
-        altitudeView.setText(temp);
-
-        // output flight time:
-        TextView timerTextView = (TextView) (findViewById(R.id.timerTextView));
-        double elapsedTime = startTime == -1 ? 0 : (System.currentTimeMillis() - startTime) / 1000.0;
-        int minutes = ((int) elapsedTime % 3600) / 60;
-        int seconds = (int) elapsedTime % 60;
-        temp = String.format("Flight Time is %02d:%02d", minutes, seconds);
-        timerTextView.setText(temp);
 
         runOnUiThread(new Runnable() {
             @Override
