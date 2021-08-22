@@ -32,6 +32,7 @@ import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -51,6 +52,13 @@ import dji.common.util.CommonCallbacks;
 import dji.sdk.base.BaseProduct;
 import dji.sdk.flightcontroller.FlightController;
 import dji.common.error.DJIError;
+import dji.sdk.mission.MissionControl;
+import dji.sdk.mission.timeline.TimelineElement;
+import dji.sdk.mission.timeline.TimelineEvent;
+import dji.sdk.mission.timeline.TimelineMission;
+import dji.sdk.mission.timeline.actions.AircraftYawAction;
+import dji.sdk.mission.timeline.actions.GoToAction;
+import dji.sdk.mission.timeline.actions.TakeOffAction;
 import dji.sdk.mission.waypoint.WaypointMissionOperator;
 import dji.sdk.mission.waypoint.WaypointMissionOperatorListener;
 import dji.sdk.products.Aircraft;
@@ -63,27 +71,22 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
 
     private GoogleMap gMap;
 
-    private Button locate, add, clear;
-    private Button config, upload, start,stop, cameraView;
-
-    private boolean isAdd = false;
+    private Button locate;
+    private Button start,stop, cameraView;
 
     private double droneLocationLat = 181, droneLocationLng = 181;
     private final Map<Integer, Marker> mMarkers = new ConcurrentHashMap<Integer, Marker>();
     private Marker droneMarker = null;
 
-    private float altitude = 100.0f;
-    private float mSpeed = 10.0f;
-
-    private List<Waypoint> waypointList = new ArrayList<>();
-
-    public static WaypointMission.Builder waypointMissionBuilder;
     private FlightController mFlightController;
-    private WaypointMissionOperator instance;
-    private WaypointMissionFinishedAction mFinishedAction = WaypointMissionFinishedAction.NO_ACTION;
-    private WaypointMissionHeadingMode mHeadingMode = WaypointMissionHeadingMode.AUTO;
 
     private static long startTime = -1;
+
+    // Timeline
+    private MissionControl missionControl;
+    private TimelineEvent preEvent;
+    private TimelineElement preElement;
+    private DJIError preError;
 
     @Override
     protected void onResume(){
@@ -99,16 +102,7 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
     @Override
     protected void onDestroy(){
         unregisterReceiver(mReceiver);
-        removeListener();
         super.onDestroy();
-    }
-
-    /**
-     * @Description : RETURN Button RESPONSE FUNCTION
-     */
-    public void onReturn(View view){
-        Log.d(TAG, "onReturn");
-        this.finish();
     }
 
     private void setResultToToast(final String string){
@@ -123,19 +117,11 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
     private void initUI() {
 
         locate = (Button) findViewById(R.id.locate);
-        add = (Button) findViewById(R.id.add);
-        clear = (Button) findViewById(R.id.clear);
-        config = (Button) findViewById(R.id.config);
-        upload = (Button) findViewById(R.id.upload);
         start = (Button) findViewById(R.id.start);
         stop = (Button) findViewById(R.id.stop);
         cameraView = (Button) findViewById(R.id.cameraView);
 
         locate.setOnClickListener(this);
-        add.setOnClickListener(this);
-        clear.setOnClickListener(this);
-        config.setOnClickListener(this);
-        upload.setOnClickListener(this);
         start.setOnClickListener(this);
         stop.setOnClickListener(this);
         cameraView.setOnClickListener(this);
@@ -173,24 +159,6 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
         mapFragment.getMapAsync(this);
-
-        addListener();
-
-
-        // Timer Thread:
-        //Thread timerThread = new Thread(new Runnable() {
-        //    public void run() {
-        //        long startTime = System.currentTimeMillis();
-        //        TextView timerTextView = (TextView) (findViewById(R.id.timerTextView));
-        //        while (true) {
-        //            String str = "Flight time: " + (System.currentTimeMillis() - startTime) / 1000.0;
-        //            timerTextView.setText(str);
-        //        }
-        //    }
-        //});
-        //timerThread.start();
-
-
     }
 
     protected BroadcastReceiver mReceiver = new BroadcastReceiver() {
@@ -244,19 +212,6 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
         }
     }
 
-    //Add Listener for WaypointMissionOperator
-    private void addListener() {
-        if (getWaypointMissionOperator() != null) {
-            getWaypointMissionOperator().addListener(eventNotificationListener);
-        }
-    }
-
-    private void removeListener() {
-        if (getWaypointMissionOperator() != null) {
-            getWaypointMissionOperator().removeListener(eventNotificationListener);
-        }
-    }
-
     private WaypointMissionOperatorListener eventNotificationListener = new WaypointMissionOperatorListener() {
         @Override
         public void onDownloadUpdate(WaypointMissionDownloadEvent downloadEvent) {
@@ -284,37 +239,13 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
         }
     };
 
-    public WaypointMissionOperator getWaypointMissionOperator() {
-        if (instance == null) {
-            if (DJISDKManager.getInstance().getMissionControl() != null){
-                instance = DJISDKManager.getInstance().getMissionControl().getWaypointMissionOperator();
-            }
-        }
-        return instance;
-    }
-
     private void setUpMap() {
         gMap.setOnMapClickListener(this); // add the listener for click for a map object
     }
 
     @Override
     public void onMapClick(LatLng point) {
-        if (isAdd == true){
-            markWaypoint(point);
-            Waypoint mWaypoint = new Waypoint(point.latitude, point.longitude, altitude);
-            //Add Waypoints to Waypoint arraylist;
-            if (waypointMissionBuilder != null) {
-                waypointList.add(mWaypoint);
-                waypointMissionBuilder.waypointList(waypointList).waypointCount(waypointList.size());
-            }else
-            {
-                waypointMissionBuilder = new WaypointMission.Builder();
-                waypointList.add(mWaypoint);
-                waypointMissionBuilder.waypointList(waypointList).waypointCount(waypointList.size());
-            }
-        }else{
-            setResultToToast("Cannot Add Waypoint");
-        }
+        // What to do when user clicks the map:
     }
 
     public static boolean checkGpsCoordination(double latitude, double longitude) {
@@ -416,37 +347,12 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
                 cameraUpdate(); // Locate the drone's place
                 break;
             }
-            case R.id.add:{
-                enableDisableAdd();
-                break;
-            }
-            case R.id.clear:{
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        gMap.clear();
-                    }
-
-                });
-                waypointList.clear();
-                waypointMissionBuilder.waypointList(waypointList);
-                updateDroneLocation();
-                break;
-            }
-            case R.id.config:{
-                showSettingDialog();
-                break;
-            }
-            case R.id.upload:{
-                uploadWayPointMission();
-                break;
-            }
             case R.id.start:{
-                startWaypointMission();
+                startTimelineMission();
                 break;
             }
             case R.id.stop:{
-                stopWaypointMission();
+                stopTimelineMission();
                 break;
             }
             case R.id.cameraView:{
@@ -466,100 +372,6 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
 
     }
 
-    private void enableDisableAdd(){
-        if (isAdd == false) {
-            isAdd = true;
-            add.setText("Exit");
-        }else{
-            isAdd = false;
-            add.setText("Add");
-        }
-    }
-
-    private void showSettingDialog(){
-        LinearLayout wayPointSettings = (LinearLayout)getLayoutInflater().inflate(R.layout.dialog_waypointsetting, null);
-
-        final TextView wpAltitude_TV = (TextView) wayPointSettings.findViewById(R.id.altitude);
-        RadioGroup speed_RG = (RadioGroup) wayPointSettings.findViewById(R.id.speed);
-        RadioGroup actionAfterFinished_RG = (RadioGroup) wayPointSettings.findViewById(R.id.actionAfterFinished);
-        RadioGroup heading_RG = (RadioGroup) wayPointSettings.findViewById(R.id.heading);
-
-        speed_RG.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener(){
-
-            @Override
-            public void onCheckedChanged(RadioGroup group, int checkedId) {
-                if (checkedId == R.id.lowSpeed){
-                    mSpeed = 3.0f;
-                } else if (checkedId == R.id.MidSpeed){
-                    mSpeed = 5.0f;
-                } else if (checkedId == R.id.HighSpeed){
-                    mSpeed = 10.0f;
-                }
-            }
-
-        });
-
-        actionAfterFinished_RG.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
-
-            @Override
-            public void onCheckedChanged(RadioGroup group, int checkedId) {
-                Log.d(TAG, "Select finish action");
-                if (checkedId == R.id.finishNone){
-                    mFinishedAction = WaypointMissionFinishedAction.NO_ACTION;
-                } else if (checkedId == R.id.finishGoHome){
-                    mFinishedAction = WaypointMissionFinishedAction.GO_HOME;
-                } else if (checkedId == R.id.finishAutoLanding){
-                    mFinishedAction = WaypointMissionFinishedAction.AUTO_LAND;
-                } else if (checkedId == R.id.finishToFirst){
-                    mFinishedAction = WaypointMissionFinishedAction.GO_FIRST_WAYPOINT;
-                }
-            }
-        });
-
-        heading_RG.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
-
-            @Override
-            public void onCheckedChanged(RadioGroup group, int checkedId) {
-                Log.d(TAG, "Select heading");
-
-                if (checkedId == R.id.headingNext) {
-                    mHeadingMode = WaypointMissionHeadingMode.AUTO;
-                } else if (checkedId == R.id.headingInitDirec) {
-                    mHeadingMode = WaypointMissionHeadingMode.USING_INITIAL_DIRECTION;
-                } else if (checkedId == R.id.headingRC) {
-                    mHeadingMode = WaypointMissionHeadingMode.CONTROL_BY_REMOTE_CONTROLLER;
-                } else if (checkedId == R.id.headingWP) {
-                    mHeadingMode = WaypointMissionHeadingMode.USING_WAYPOINT_HEADING;
-                }
-            }
-        });
-
-        new AlertDialog.Builder(this)
-                .setTitle("")
-                .setView(wayPointSettings)
-                .setPositiveButton("Finish",new DialogInterface.OnClickListener(){
-                    public void onClick(DialogInterface dialog, int id) {
-
-                        String altitudeString = wpAltitude_TV.getText().toString();
-                        altitude = Integer.parseInt(nulltoIntegerDefalt(altitudeString));
-                        Log.e(TAG,"altitude "+altitude);
-                        Log.e(TAG,"speed "+mSpeed);
-                        Log.e(TAG, "mFinishedAction "+mFinishedAction);
-                        Log.e(TAG, "mHeadingMode "+mHeadingMode);
-                        configWayPointMission();
-                    }
-
-                })
-                .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-                    public void onClick(DialogInterface dialog, int id) {
-                        dialog.cancel();
-                    }
-
-                })
-                .create()
-                .show();
-    }
-
     String nulltoIntegerDefalt(String value){
         if(!isIntValue(value)) value="0";
         return value;
@@ -574,75 +386,51 @@ public class Waypoint1Activity extends FragmentActivity implements View.OnClickL
         return true;
     }
 
-    private void configWayPointMission(){
+    // Timeline:
+    private void updateTimelineStatus(@Nullable TimelineElement element, TimelineEvent event, DJIError error) {
 
-        if (waypointMissionBuilder == null){
-
-            waypointMissionBuilder = new WaypointMission.Builder().finishedAction(mFinishedAction)
-                    .headingMode(mHeadingMode)
-                    .autoFlightSpeed(mSpeed)
-                    .maxFlightSpeed(mSpeed)
-                    .flightPathMode(WaypointMissionFlightPathMode.NORMAL);
-
-        } else {
-            waypointMissionBuilder.finishedAction(mFinishedAction)
-                    .headingMode(mHeadingMode)
-                    .autoFlightSpeed(mSpeed)
-                    .maxFlightSpeed(mSpeed)
-                    .flightPathMode(WaypointMissionFlightPathMode.NORMAL);
+        if (element == preElement && event == preEvent && error == preError) {
+            return;
         }
 
-        if (waypointMissionBuilder.getWaypointList().size() > 0){
-            for (int i=0; i< waypointMissionBuilder.getWaypointList().size(); i++){
-                waypointMissionBuilder.getWaypointList().get(i).altitude = altitude;
-            }
-            setResultToToast("Set Waypoint attitude successfully");
-        }
-
-        DJIError error = getWaypointMissionOperator().loadMission(waypointMissionBuilder.build());
-        if (error == null) {
-            setResultToToast("loadWaypoint succeeded");
-        } else {
-            setResultToToast("loadWaypoint failed " + error.getDescription());
-        }
+        preEvent = event;
+        preElement = element;
+        preError = error;
     }
 
-    private void uploadWayPointMission(){
-
-        getWaypointMissionOperator().uploadMission(new CommonCallbacks.CompletionCallback() {
-            @Override
-            public void onResult(DJIError error) {
-                if (error == null) {
-                    setResultToToast("Mission upload successfully!");
-                } else {
-                    setResultToToast("Mission upload failed, error: " + error.getDescription() + " retrying...");
-                    getWaypointMissionOperator().retryUploadMission(null);
-                }
-            }
-        });
-
-    }
-
-    private void startWaypointMission(){
+    private void startTimelineMission(){
         startTime = System.currentTimeMillis();
 
-        getWaypointMissionOperator().startMission(new CommonCallbacks.CompletionCallback() {
+        // Timeline:
+        List<TimelineElement> elements = new ArrayList<>();
+        missionControl = MissionControl.getInstance();
+        MissionControl.Listener listener = new MissionControl.Listener() {
             @Override
-            public void onResult(DJIError error) {
-                setResultToToast("Mission Start: " + (error == null ? "Successfully" : error.getDescription()));
+            public void onEvent(@Nullable TimelineElement element, TimelineEvent event, DJIError error) {
+                updateTimelineStatus(element, event, error);
             }
-        });
+        };
+        elements.add(new TakeOffAction());
+        elements.add(new GoToAction((float) -1.00));
+        elements.add(new AircraftYawAction(-100,false));
+        elements.add(new AircraftYawAction(100,false));
+        elements.add(new AircraftYawAction(-100,false));
+        elements.add(new AircraftYawAction(100,false));
+        if (missionControl.scheduledCount() > 0) {
+            missionControl.unscheduleEverything();
+            missionControl.removeAllListeners();
+        }
+        missionControl.scheduleElements(elements);
+        missionControl.addListener(listener);
+        missionControl.startTimeline();
     }
 
-    private void stopWaypointMission() {
+    private void stopTimelineMission() {
         startTime = -1;
-
-        getWaypointMissionOperator().stopMission(new CommonCallbacks.CompletionCallback() {
-            @Override
-            public void onResult(DJIError error) {
-                setResultToToast("Mission Stop: " + (error == null ? "Successfully" : error.getDescription()));
-            }
-        });
+        if (missionControl.scheduledCount() > 0) {
+            missionControl.unscheduleEverything();
+            missionControl.removeAllListeners();
+        }
     }
 
     private void toggleCameraView(){
