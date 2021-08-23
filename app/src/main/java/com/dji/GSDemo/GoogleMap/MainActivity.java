@@ -12,7 +12,7 @@ public class MainActivity extends AppCompatActivity {
     private View.OnClickListener clickListener = v -> {
         switch (v.getId()) {
             case R.id.btn_waypoint1:
-                startActivity(MainActivity.this, Waypoint1Activity.class);
+                startActivity(MainActivity.this, TimelineActivity.class);
                 break;
         }
     };

@@ -1,6 +1,5 @@
 package com.dji.GSDemo.GoogleMap;
 
-import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.AssetManager;
@@ -13,12 +12,12 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.TextureView.SurfaceTextureListener;
-import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ToggleButton;
+import android.os.AsyncTask; // AsyncTask for setting object recognition label for TextView
 
 import com.dji.GSDemo.GoogleMap.cnn.CNNExtractorService;
 import com.dji.GSDemo.GoogleMap.cnn.impl.CNNExtractorServiceImpl;
@@ -27,13 +26,15 @@ import org.opencv.android.BaseLoaderCallback;
 import org.opencv.android.CameraBridgeViewBase;
 import org.opencv.android.LoaderCallbackInterface;
 import org.opencv.dnn.Net;
+import org.opencv.android.OpenCVLoader;
+import org.opencv.core.Mat;
+import org.opencv.core.CvType;
+import org.opencv.android.Utils;
 
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.Collections;
-import java.util.List;
 
 import dji.common.camera.SettingsDefinitions;
 import dji.common.camera.SystemState;
@@ -58,10 +59,10 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
     private Button mCaptureBtn, mShootPhotoModeBtn, mRecordVideoModeBtn, mMapBtn;
     private ToggleButton mRecordBtn;
     private TextView recordingTime;
-
+    private TextView predictedClassLabel;
     private Handler handler;
 
-    // opencv
+    // OpenCV
     private static final String IMAGENET_CLASSES = "imagenet_classes.txt";
     private static final String MODEL_FILE = "pytorch_mobilenet.onnx";
 
@@ -70,14 +71,14 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
 
     private CNNExtractorService cnnService;
 
-    // opencv
+    // OpenCV
     private BaseLoaderCallback mLoaderCallback = new BaseLoaderCallback(this) {
         @Override
         public void onManagerConnected(int status) {
             switch (status) {
                 case LoaderCallbackInterface.SUCCESS: {
                     Log.i(TAG,"OpenCV loaded successfully!");
-                    mOpenCvCameraView.enableView();
+                    //mOpenCvCameraView.enableView();
                 }
                 break;
                 default: {
@@ -108,6 +109,22 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
                 }
             }
         };
+
+        // OpenCV manager initialization
+        OpenCVLoader.initDebug();
+        //mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
+
+        // initialize implementation of CNNExtractorService
+        this.cnnService = new CNNExtractorServiceImpl();
+
+        // Neural Network model file reading
+        // obtaining converted network
+        String onnxModelPath = getPath(MODEL_FILE, this);
+        if (onnxModelPath.trim().isEmpty()) {
+            Log.i(TAG, "Failed to get model file");
+            return;
+        }
+        opencvNet = cnnService.getConvertedNet(onnxModelPath, TAG);
 
         Camera camera = FPVApplication.getCameraInstance();
 
@@ -148,19 +165,6 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
             });
 
         }
-
-        this.cnnService = new CNNExtractorServiceImpl();
-
-        // opencv
-        /*
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        // initialize implementation of CNNExtractorService
-        this.cnnService = new CNNExtractorServiceImpl();
-        // configure camera listener
-        //mOpenCvCameraView = (CameraBridgeViewBase) findViewById(R.id.video_previewer_surface); // Cannot cast
-        mOpenCvCameraView.setVisibility(CameraBridgeViewBase.VISIBLE);
-        mOpenCvCameraView.setCvCameraViewListener(this);
-         */
     }
 
     protected void onProductChange() {
@@ -184,6 +188,28 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
                 });
     }
 
+    private static String getPath(String file, Context context) {
+        AssetManager assetManager = context.getAssets();
+        BufferedInputStream inputStream;
+        try {
+            // read the defined data from assets
+            inputStream = new BufferedInputStream(assetManager.open(file));
+            byte[] data = new byte[inputStream.available()];
+            inputStream.read(data);
+            inputStream.close();
+            // Create copy file in storage.
+            File outFile = new File(context.getFilesDir(), file);
+            FileOutputStream os = new FileOutputStream(outFile);
+            os.write(data);
+            os.close();
+            // Return a path to file which may be read in common way.
+            return outFile.getAbsolutePath();
+        } catch (IOException ex) {
+            Log.i(TAG, "Failed to upload a file");
+        }
+        return "";
+    }
+
     @Override
     public void onResume() {
         Log.e(TAG, "onResume");
@@ -194,10 +220,6 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
         if(mVideoSurface == null) {
             Log.e(TAG, "mVideoSurface is null");
         }
-
-        // OpenCV manager initialization
-        //OpenCVLoader.initDebug();
-        //mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
     }
 
     @Override
@@ -235,6 +257,7 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
         mShootPhotoModeBtn = (Button) findViewById(R.id.btn_shoot_photo_mode);
         mRecordVideoModeBtn = (Button) findViewById(R.id.btn_record_video_mode);
         mMapBtn = (Button) findViewById(R.id.btn_map);
+        predictedClassLabel = (TextView)  findViewById(R.id.classLabel); // For object recognition label
 
         if (null != mVideoSurface) {
             mVideoSurface.setSurfaceTextureListener(this);
@@ -247,6 +270,7 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
         mMapBtn.setOnClickListener(this);
 
         recordingTime.setVisibility(View.INVISIBLE);
+        predictedClassLabel.setVisibility(View.VISIBLE);
 
         mRecordBtn.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
@@ -308,39 +332,21 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
         return false;
     }
 
-    private static String getPath(String file, Context context) {
-        AssetManager assetManager = context.getAssets();
-        BufferedInputStream inputStream;
-        try {
-            // read the defined data from assets
-            inputStream = new BufferedInputStream(assetManager.open(file));
-            byte[] data = new byte[inputStream.available()];
-            inputStream.read(data);
-            inputStream.close();
-            // Create copy file in storage.
-            File outFile = new File(context.getFilesDir(), file);
-            FileOutputStream os = new FileOutputStream(outFile);
-            os.write(data);
-            os.close();
-            // Return a path to file which may be read in common way.
-            return outFile.getAbsolutePath();
-        } catch (IOException ex) {
-            Log.i(TAG, "Failed to upload a file");
-        }
-        return "";
-    }
 
     @Override
     public void onSurfaceTextureUpdated(SurfaceTexture surface) {
-        /*
+        // Convert SurfaceTexture to Bitmap
         final Bitmap frame = mVideoSurface.getBitmap();
-        //Do whatever you want with the bitmap image here on every frame
+        // Convert Bitmap to Mat
         Mat tmp = new Mat (frame.getHeight(), frame.getWidth(), CvType.CV_8UC1);
+        Utils.bitmapToMat(frame, tmp);
+        // Get path for pre-trained model file and obtain object recognition label
         String classesPath = getPath(IMAGENET_CLASSES, this);
         String predictedClass = cnnService.getPredictedLabel(tmp, opencvNet, classesPath);
-        // place the predicted label on the image
-        Imgproc.putText(tmp, predictedClass, new Point(200, 100), Imgproc.FONT_HERSHEY_SIMPLEX, 2, new Scalar(255, 121, 0), 3);
-         */
+        // Use AsyncTask to set object recognition label
+        AsyncTaskRunner runner = new AsyncTaskRunner();
+        runner.execute(predictedClass);
+
     }
 
     public void showToast(final String msg) {
@@ -368,7 +374,7 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
                 break;
             }
             case R.id.btn_map:
-                startActivity(new Intent(this, Waypoint1Activity.class));
+                startActivity(new Intent(this, TimelineActivity.class));
             default:
                 break;
         }
@@ -461,5 +467,22 @@ public class CameraActivity extends org.opencv.android.CameraActivity implements
             }); // Execute the stopRecordVideo API
         }
 
+    }
+
+    // AsyncTask for putting object recognition label
+    private class AsyncTaskRunner extends AsyncTask<String, Void, String> {
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+        }
+
+        protected String doInBackground(String... label) {
+            return label[0];
+        }
+
+        protected void onPostExecute(String result) {
+            predictedClassLabel.setText(result);
+        }
     }
 }
